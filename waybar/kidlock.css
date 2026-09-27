@@ -1,0 +1,26 @@
+/* kidlock Waybar styling. Append to ~/.config/waybar/style.css.
+ * Obvious at a glance: calm green when unlocked, strong red when locked. */
+
+#custom-kidlock {
+  padding: 0 12px;
+  margin: 0 4px;
+  border-radius: 8px;
+  font-weight: bold;
+}
+
+#custom-kidlock.unlocked {
+  background: #2a4a2f;
+  color: #b8f0b8;
+  border: 1px solid #4caf50;
+}
+
+#custom-kidlock.locked {
+  background: #5c1a1a;
+  color: #ffd7d7;
+  border: 2px solid #ff5252;
+  animation: kidlock-blink 1.2s steps(2, start) infinite;
+}
+
+@keyframes kidlock-blink {
+  50% { border-color: #ffb3b3; }
+}

@@ -1,0 +1,30 @@
+// Waybar "custom/kidlock" module for the classroom keyboard lock.
+// Tested against the kidlock CLI in this repo. On Omarchy 4+ the default bar
+// is Quickshell-based (see ../quickshell/); use this file on systems that
+// still run Waybar (older Omarchy, stock Hyprland setups).
+//
+// INSTALL (Waybar):
+//   1. Merge the "custom/kidlock" object below into your waybar config's
+//      "modules-center" array, e.g.:
+//          "modules-center": ["custom/kidlock", "clock"],
+//   2. Append ../waybar/kidlock.css (this repo's waybar/kidlock.css) to your
+//      waybar style.css.
+//   3. Reload waybar:  pkill waybar; waybar &   (or: systemctl --user restart waybar)
+//   4. Click the module with the MOUSE to toggle. Keyboard cannot toggle it
+//      while locked -- that is the point.
+//
+// The module polls `kidlock status --waybar` (JSON, never fails) every
+// 2 seconds. Clicking runs `kidlock toggle`. Polling (not signals) is used
+// on purpose: the widget recovers on its own if it ever misses an event.
+
+{
+  "custom/kidlock": {
+    "exec": "kidlock status --waybar",
+    "return-type": "json",
+    "interval": 2,
+    "on-click": "kidlock toggle",
+    "on-click-right": "kidlock unlock",
+    "tooltip": true,
+    "escape": true
+  }
+}

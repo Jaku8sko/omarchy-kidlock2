@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "kidlock.keyboard-lock",
+  "name": "Keyboard lock",
+  "version": "0.1.0",
+  "author": "kidlock",
+  "license": "MIT",
+  "description": "Classroom keyboard lock: mouse-click toggle that swallows shortcut keys via a Hyprland submap while leaving normal typing alone",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Keyboard lock",
+    "description": "Click to lock/unlock the keyboard for student sessions",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}

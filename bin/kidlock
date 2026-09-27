@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# kidlock -- classroom keyboard-lock for Omarchy OS (Hyprland / Wayland).
+#
+# HOW IT WORKS (short version):
+#   * Locking does NOT grab keys itself. It asks the compositor (Hyprland) to
+#     enter the `kidlock` submap:  hyprctl eval 'hl.dispatch(hl.dsp.submap("kidlock"))'
+#   * Inside that submap every dangerous combo (Ctrl/Alt/Super+..., bare
+#     Esc/Tab/arrows/F-keys/...) is bound to the `no_op` dispatcher, so the
+#     compositor consumes it and the focused app never receives it.
+#   * Plain typing keys are simply NOT bound, so they flow to the app normally.
+#   * All default Hyprland binds (workspaces, window mgmt, launcher, ...) are
+#     inactive while in the submap, because they belong to the `reset` submap.
+#   * Unlocking returns to the `reset` submap: normal behaviour resumes.
+#
+# CONSEQUENCES worth knowing:
+#   * There is no daemon holding keys hostage: if this script dies, the lock
+#     state simply stays where it is (fail-explicit, never fail-dead).
+#   * hyprctl talks to the current user's Hyprland instance, so the lock is
+#     scoped to this user session by construction. No root needed or wanted.
+#   * Mouse input is never bound or grabbed; clicks/scroll keep working,
+#     including the click that unlocks.
+#
+# STATE: $XDG_RUNTIME_DIR/kidlock/state  (fallback: ~/.cache/kidlock/state)
+# CONFIG: ~/.config/kidlock/kidlock.conf
+
+set -u
+
+KIDLOCK_VERSION="0.1.0"
+KIDLOCK_SUBMAP="kidlock"
+
+CONFIG_FILE="${HOME}/.config/kidlock/kidlock.conf"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-${HOME}/.cache}/kidlock"
+STATE_FILE="${RUNTIME_DIR}/state"
+
+# ---- defaults (overridable in kidlock.conf) -------------------------------
+KIDLOCK_ENABLED="true"
+KIDLOCK_INITIAL_STATE="UNLOCKED"   # LOCKED | UNLOCKED
+KIDLOCK_USER=""                    # empty = current user owns the lock
+# Behaviour flags consumed by `kidlock apply-config` (lua regeneration):
+BLOCK_ESC="true" BLOCK_TAB="true" BLOCK_ARROWS="true"
+BLOCK_NAV="true" BLOCK_FKEYS="true" BLOCK_SYS="true"
+
+# ---- helpers ---------------------------------------------------------------
+log()  { printf 'kidlock: %s\n' "$*"; }
+die()  { printf 'kidlock: ERROR: %s\n' "$*" >&2; exit 1; }
+
+load_config() {
+    # shellcheck disable=SC1090
+    [ -f "${CONFIG_FILE}" ] && . "${CONFIG_FILE}"
+}
+
+ensure_runtime() { mkdir -p "${RUNTIME_DIR}" 2>/dev/null || true; }
+
+notify() {
+    # Best-effort desktop notification; never fatal (headless/SSH use).
+    if command -v omarchy-notification-send >/dev/null 2>&1; then
+        omarchy-notification-send "Keyboard lock" "$*" >/dev/null 2>&1 || true
+    elif command -v notify-send >/dev/null 2>&1; then
+        notify-send "Keyboard lock" "$*" >/dev/null 2>&1 || true
+    fi
+}
+
+# Refuse to run outside the owning Hyprland user session, or as root.
+check_session() {
+    [ "$(id -u)" -eq 0 ] && die "refusing to run as root (session-scoped tool; log in as the student user)"
+    [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && die "not inside a Hyprland session (HYPRLAND_INSTANCE_SIGNATURE is empty)"
+    command -v hyprctl >/dev/null 2>&1 || die "hyprctl not found in PATH"
+    if [ -n "${KIDLOCK_USER}" ] && [ "${USER:-$(id -un)}" != "${KIDLOCK_USER}" ]; then
+        die "this lock is owned by user '${KIDLOCK_USER}' (you are '${USER:-$(id -un)}')"
+    fi
+}
+
+current_submap() { hyprctl submap 2>/dev/null | head -n1 | tr -d '[:space:]'; }
+
+read_state() {
+    # Creates the file on first read so bar widgets can watch a path that
+    # always exists. A read that creates UNLOCKED is harmless: the compositor
+    # submap (not this file) is the source of truth -- see do_status().
+    if [ ! -f "${STATE_FILE}" ]; then write_state "UNLOCKED"; fi
+    head -n1 "${STATE_FILE}" | tr -d '[:space:]'
+}
+
+write_state() { ensure_runtime; printf '%s\n' "$1" > "${STATE_FILE}"; }
+
+submap_has_kidlock_binds() {
+    # True when the compositor knows the kidlock submap (i.e. kidlock.lua loaded).
+    hyprctl -j binds 2>/dev/null | grep -q '"submap": *"kidlock"' || hyprctl -j binds 2>/dev/null | grep -q '"submap":"kidlock"'
+}
+
+do_lock() {
+    check_session
+    if ! submap_has_kidlock_binds; then
+        die "compositor does not know the 'kidlock' submap -- run 'kidlock apply-config', add require(\"hypr.kidlock\") to your Hyprland config, and 'hyprctl reload'"
+    fi
+    hyprctl eval 'hl.dispatch(hl.dsp.submap("kidlock"))' >/dev/null 2>&1 \
+        || die "could not switch submap (is Hyprland reachable?)"
+    if [ "$(current_submap)" != "${KIDLOCK_SUBMAP}" ]; then
+        die "lock dispatch ran but submap is '$(current_submap)' -- run 'kidlock doctor'"
+    fi
+    write_state "LOCKED"
+    notify "Keyboard locked -- click the lock icon to unlock."
+    log "LOCKED (submap=kidlock)"
+}
+
+do_unlock() {
+    check_session
+    hyprctl eval 'hl.dispatch(hl.dsp.submap("reset"))' >/dev/null 2>&1 \
+        || die "could not switch submap (is Hyprland reachable?)"
+    write_state "UNLOCKED"
+    notify "Keyboard unlocked."
+    log "UNLOCKED (submap=reset)"
+}
+
+do_toggle() {
+    if [ "$(current_submap 2>/dev/null)" = "${KIDLOCK_SUBMAP}" ]; then do_unlock; else do_lock; fi
+}
+
+do_status() {
+    # status [--flat|--waybar]  -- never fails; safe for bar polling.
+    local mode="${1:-flat}"
+    local sub state
+    sub="$(current_submap 2>/dev/null || echo "?")"
+    state="$(read_state)"
+    # Reconcile: compositor truth wins over the state file.
+    if   [ "${sub}" = "${KIDLOCK_SUBMAP}" ]; then state="LOCKED"
+    elif [ "${sub}" = "default" ] || [ "${sub}" = "reset" ]; then state="UNLOCKED"; fi
+    case "${mode}" in
+        --waybar)
+            if [ "${state}" = "LOCKED" ]; then
+                printf '{"text":"🔒 LOCKED","class":"locked","alt":"locked","tooltip":"Keyboard locked. Click to unlock."}\n'
+            else
+                printf '{"text":"🔓 UNLOCKED","class":"unlocked","alt":"unlocked","tooltip":"Keyboard unlocked. Click to lock."}\n'
+            fi ;;
+        *) printf '%s\n' "${state}" ;;
+    esac
+}
+
+do_boot() {
+    # Applied by the systemd user unit at login: honour the admin config.
+    load_config
+    [ "${KIDLOCK_ENABLED}" = "true" ] || { log "disabled in config; staying unlocked"; write_state "UNLOCKED"; return 0; }
+    if [ "${KIDLOCK_INITIAL_STATE}" = "LOCKED" ]; then do_lock; else write_state "UNLOCKED"; log "initial state UNLOCKED"; fi
+}
+
+do_apply_config() {
+    # Regenerate ~/.config/hypr/kidlock.lua from kidlock.conf.
+    load_config
+    local script_dir gen
+    script_dir="$(cd "$(dirname "$0")" && pwd)"
+    # Installed layout: lib/ sits next to bin/; dev layout: ../lib/.
+    if [ -f "${script_dir}/../lib/generate_lua.py" ]; then gen="${script_dir}/../lib/generate_lua.py";
+    elif [ -f "${script_dir}/generate_lua.py" ]; then gen="${script_dir}/generate_lua.py";
+    else gen="$(command -v kidlock-generate-lua || true)"; fi
+    [ -n "${gen}" ] && [ -f "${gen}" ] || die "generate_lua.py not found"
+    python3 "${gen}" --config "${CONFIG_FILE}" --output "${HOME}/.config/hypr/kidlock.lua"
+    log "now run: hyprctl reload   (keeps current lock state; re-registers binds)"
+}
+
+do_doctor() {
+    # Diagnose common problems; exit non-zero on real breakage.
+    local ok=0
+    command -v hyprctl >/dev/null 2>&1 || { echo "FAIL: hyprctl not in PATH"; ok=1; }
+    [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] || { echo "FAIL: not in a Hyprland session"; ok=1; }
+    if submap_has_kidlock_binds; then
+        local n
+        n="$(hyprctl -j binds 2>/dev/null | grep -c '"submap": *"kidlock"\|"submap":"kidlock"')"
+        echo "OK: kidlock submap registered with ~${n} swallow binds"
+    else
+        echo "FAIL: kidlock submap unknown to compositor (run install / apply-config + reload)"; ok=1
+    fi
+    echo "INFO: submap=$(current_submap 2>/dev/null || echo '?') state=$(read_state)"
+    [ -f "${CONFIG_FILE}" ] && echo "OK: config ${CONFIG_FILE}" || echo "INFO: no config file (defaults apply)"
+    command -v wtype >/dev/null 2>&1 && echo "OK: wtype available (typing tests)" || echo "INFO: wtype missing (typing tests unavailable)"
+    return "${ok}"
+}
+
+usage() {
+    cat <<EOF
+kidlock ${KIDLOCK_VERSION} -- classroom keyboard-lock for Hyprland/Omarchy
+
+Usage: kidlock <command>
+  lock            Enter the kidlock submap (swallow shortcuts, keep typing)
+  unlock          Return to the normal (reset) submap  [EMERGENCY: run over SSH/VT]
+  toggle          lock if unlocked, unlock if locked (used by bar click)
+  status [--waybar]  print LOCKED/UNLOCKED (or Waybar JSON with --waybar)
+  boot            apply KIDLOCK_INITIAL_STATE (used by systemd at login)
+  apply-config    regenerate ~/.config/hypr/kidlock.lua from kidlock.conf
+  doctor          diagnose installation / session problems
+  version | help  this text
+
+Emergency unlock (Waybar/bar frozen, mouse dead, stuck session):
+  1. Open any shell you can reach: SSH in, press Ctrl+Alt+F3 for a VT and
+     log in as the student user (or as admin, then switch user), or open a
+     terminal with the mouse, then run:   kidlock unlock
+  2. Or: systemctl --user stop kidlock   (ExecStop unlocks)
+  3. VT-switching (Ctrl+Alt+F1..F6) is handled by the kernel, NOT by Hyprland,
+     so it always works even while locked -- that is intentional.
+EOF
+}
+
+main() {
+    load_config
+    local cmd="${1:-help}"
+    case "${cmd}" in
+        lock)         do_lock ;;
+        unlock)       do_unlock ;;
+        toggle)       do_toggle ;;
+        status)       do_status "${2:-flat}" ;;
+        boot)         do_boot ;;
+        apply-config) do_apply_config ;;
+        doctor)       do_doctor ;;
+        version)      echo "kidlock ${KIDLOCK_VERSION}" ;;
+        help|--help|-h) usage ;;
+        *) usage >&2; exit 2 ;;
+    esac
+}
+
+main "$@"

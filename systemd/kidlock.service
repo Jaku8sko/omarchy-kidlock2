@@ -1,0 +1,27 @@
+# kidlock.service -- systemd USER unit for the classroom keyboard lock.
+#
+# At login it applies the admin's chosen initial state (`kidlock boot`
+# honours KIDLOCK_INITIAL_STATE in ~/.config/kidlock/kidlock.conf).
+# Stopping the unit always unlocks, which doubles as a recovery path:
+#     systemctl --user stop kidlock
+#
+# Install:  install.sh copies this to ~/.config/systemd/user/kidlock.service
+# Enable (autostart at login):  systemctl --user enable kidlock.service
+
+[Unit]
+Description=Classroom keyboard lock (Hyprland submap toggle)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=%h/.local/bin/kidlock boot
+ExecStop=%h/.local/bin/kidlock unlock
+# If the compositor is not up yet at login, a missed start must not wedge
+# the session: boot only writes state unless locking is requested, and a
+# failed lock exits non-zero without touching input (fail-open).
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=default.target

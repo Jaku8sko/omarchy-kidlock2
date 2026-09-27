@@ -1,0 +1,8 @@
+# kidlock .gitignore -- this repo ships no build artifacts; these are just
+# hygiene entries so local test runs never get committed by accident.
+/tmp/
+*.log
+*.swp
+*~
+__pycache__/
+.DS_Store

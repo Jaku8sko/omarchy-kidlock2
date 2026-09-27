@@ -30,7 +30,24 @@ UNIT_DIR="${HOME}/.config/systemd/user"
 
 log() { printf 'install: %s\n' "$*"; }
 warn() { printf 'install: WARNING: %s\n' "$*" >&2; }
+die() { printf 'install: ERROR: %s\n' "$*" >&2; exit 1; }
 
+# 0. Preflight: fail fast with a clear message on a fresh machine -------------
+command -v python3 >/dev/null 2>&1 || die "python3 not found (required by the lua generator)"
+if command -v hyprctl >/dev/null 2>&1; then
+    # Best effort: kidlock needs the Hyprland Lua API (define_submap/no_op),
+    # present on Omarchy 4 / Hyprland 0.56+. Anything older is a hard stop.
+    HYPR_VER="$(hyprctl version 2>/dev/null | head -n1 | grep -oE '[0-9]+\.[0-9]+' | head -n1 || true)"
+    if [ -n "${HYPR_VER}" ]; then
+        log "Hyprland ${HYPR_VER} detected"
+        case "${HYPR_VER}" in
+            0.5[6-9]*|0.[6-9]*|[1-9]*) ;;
+            *) warn "Hyprland ${HYPR_VER} predates the Lua config API this plugin needs -- install will continue but 'kidlock doctor' will fail; Omarchy 4 / Hyprland 0.56+ required" ;;
+        esac
+    fi
+else
+    warn "hyprctl not found -- installing files only; run inside Hyprland and re-run './install.sh' to hook up binds + bar"
+fi
 [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] || warn "no Hyprland session detected (HYPRLAND_INSTANCE_SIGNATURE empty) -- installing anyway; run 'kidlock doctor' inside Hyprland later"
 
 # 1. CLI ---------------------------------------------------------------------

@@ -65,6 +65,34 @@ What it does: installs `~/.local/bin/kidlock`, creates
 the **bar centre**, installs+enables the user service, reloads Hyprland, runs
 `kidlock doctor`.
 
+The installer preflights `python3` (hard requirement) and `hyprctl` /
+Hyprland version (warn-only outside a 0.56+ session).
+
+## Manual installation (Hyprland with the Lua API, non-Omarchy)
+
+If `~/.config/hypr/bindings.lua` does not exist (stock Hyprland), do the
+equivalent of what `install.sh` automates:
+
+```bash
+mkdir -p ~/.local/bin ~/.config/kidlock ~/.config/hypr
+cp bin/kidlock ~/.local/bin/kidlock
+cp lib/generate_lua.py ~/.local/bin/kidlock-generate-lua
+chmod +x ~/.local/bin/kidlock ~/.local/bin/kidlock-generate-lua
+cp config/kidlock.conf ~/.config/kidlock/kidlock.conf   # keep existing on re-install
+kidlock apply-config                                     # generates ~/.config/hypr/kidlock.lua
+```
+
+then load the generated module from your Hyprland Lua entrypoint (whichever
+file your setup `require`s at startup):
+
+```lua
+require("hypr.kidlock")
+```
+
+and `hyprctl reload && kidlock doctor`. Requires the `hl.*` Lua API
+(`define_submap`, `dsp.no_op`) — hard requirement; `kidlock doctor` reports
+`FAIL: kidlock submap unknown` on compositors without it.
+
 ## Configuration (`~/.config/kidlock/kidlock.conf`)
 
 | Key | Default | Meaning |
@@ -209,4 +237,5 @@ quickshell/kidlock.keyboard-lock/   native Omarchy bar widget (centre)
 waybar/                     Waybar custom-module snippet + CSS
 systemd/kidlock.service     user unit: boot applies initial state, stop unlocks
 tests/smoke.sh              automated checks   TESTING.md  manual checklist
+LICENSE                     MIT   install.sh / uninstall.sh   .gitignore
 ```
